@@ -6,7 +6,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import kagglehub
+
+# tentativa segura de importar kagglehub
+try:
+    import kagglehub
+    KAGGLE_AVAILABLE = True
+except:
+    KAGGLE_AVAILABLE = False
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -26,29 +32,45 @@ st.title("📊 NASA Turbofan Engine")
 # =============================================
 @st.cache_data
 def load_data():
-    path = kagglehub.dataset_download("bishals098/nasa-turbofan-engine-degradation-simulation")
-    DATA_DIR = Path(path)
+    if not KAGGLE_AVAILABLE:
+        st.error("kagglehub não instalado. Verifique requirements.txt")
+        return pd.DataFrame()
 
-    train_path = next(DATA_DIR.rglob("train_FD001.txt"))
+    try:
+        path = kagglehub.dataset_download(
+            "bishals098/nasa-turbofan-engine-degradation-simulation"
+        )
 
-    columns = [
-        'unit', 'cycle', 'setting1', 'setting2', 'setting3',
-        'sensor1', 'sensor2', 'sensor3', 'sensor4', 'sensor5',
-        'sensor6', 'sensor7', 'sensor8', 'sensor9', 'sensor10',
-        'sensor11', 'sensor12', 'sensor13', 'sensor14', 'sensor15',
-        'sensor16', 'sensor17', 'sensor18', 'sensor19', 'sensor20',
-        'sensor21'
-    ]
+        DATA_DIR = Path(path)
 
-    df = pd.read_csv(train_path, sep=r'\s+', header=None, names=columns)
+        train_path = next(DATA_DIR.rglob("train_FD001.txt"))
 
-    max_cycles = df.groupby('unit')['cycle'].max()
-    df['RUL'] = df.apply(lambda row: max_cycles[row['unit']] - row['cycle'], axis=1)
-    df['RUL'] = df['RUL'].clip(upper=125)
+        columns = [
+            'unit', 'cycle', 'setting1', 'setting2', 'setting3',
+            'sensor1', 'sensor2', 'sensor3', 'sensor4', 'sensor5',
+            'sensor6', 'sensor7', 'sensor8', 'sensor9', 'sensor10',
+            'sensor11', 'sensor12', 'sensor13', 'sensor14', 'sensor15',
+            'sensor16', 'sensor17', 'sensor18', 'sensor19', 'sensor20',
+            'sensor21'
+        ]
 
-    return df
+        df = pd.read_csv(train_path, sep=r'\s+', header=None, names=columns)
+
+        max_cycles = df.groupby('unit')['cycle'].max()
+        df['RUL'] = df.apply(lambda row: max_cycles[row['unit']] - row['cycle'], axis=1)
+        df['RUL'] = df['RUL'].clip(upper=125)
+
+        return df
+
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {e}")
+        return pd.DataFrame()
+
 
 df_train = load_data()
+
+if df_train.empty:
+    st.stop()
 
 # =============================================
 # 3. FEATURES
@@ -79,6 +101,7 @@ def train_model(df):
 
     return model, mae, X_test, y_test, y_pred
 
+
 model, mae, X_test, y_test, y_pred = train_model(df_train)
 
 # =============================================
@@ -97,10 +120,7 @@ motor = st.sidebar.selectbox(
     ["Todos"] + sorted(df_train['unit'].unique().tolist())
 )
 
-if motor != "Todos":
-    df_filtered = df_train[df_train['unit'] == motor]
-else:
-    df_filtered = df_train
+df_filtered = df_train if motor == "Todos" else df_train[df_train['unit'] == motor]
 
 # =============================================
 # ALERTAS
@@ -130,7 +150,6 @@ if opcao == "Visão Geral":
     col3.metric("Sensores", 21)
 
     st.dataframe(df_filtered.head())
-
     st.subheader("🚨 Motores Críticos")
     st.dataframe(criticos)
 
@@ -142,8 +161,7 @@ elif opcao == "Sensores":
 
     df_mean = df_filtered.groupby('cycle')[features].mean().reset_index()
 
-    fig, ax = plt.subplots(figsize=(6,3))
-
+    fig, ax = plt.subplots(figsize=(6, 3))
     for sensor in features:
         ax.plot(df_mean['cycle'], df_mean[sensor], label=sensor)
 
@@ -158,7 +176,7 @@ elif opcao == "Correlação":
 
     corr = df_filtered[features + ['RUL']].corr()
 
-    fig, ax = plt.subplots(figsize=(6,4))
+    fig, ax = plt.subplots(figsize=(6, 4))
     sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f', ax=ax)
 
     st.pyplot(fig, use_container_width=True)
@@ -171,13 +189,12 @@ elif opcao == "Manutenção":
 
     df_plot = df_filtered.groupby('cycle')['RUL'].mean().reset_index()
 
-    fig, ax = plt.subplots(figsize=(6,3))
+    fig, ax = plt.subplots(figsize=(6, 3))
     ax.plot(df_plot['cycle'], df_plot['RUL'])
 
-    ax.axhline(50, linestyle='--', label='Atenção')
-    ax.axhline(30, linestyle='--', label='Crítico')
+    ax.axhline(50, linestyle='--')
+    ax.axhline(30, linestyle='--')
 
-    ax.legend()
     st.pyplot(fig, use_container_width=True)
 
 # =============================================
@@ -188,28 +205,27 @@ elif opcao == "Machine Learning":
 
     st.metric("Mean Absolute Error", f"{mae:.2f} ciclos")
 
-    # gráfico real vs previsto
-    fig, ax = plt.subplots(figsize=(6,3))
+    fig, ax = plt.subplots(figsize=(6, 3))
     ax.scatter(y_test, y_pred, alpha=0.3)
     ax.set_xlabel("Real")
     ax.set_ylabel("Previsto")
+
     st.pyplot(fig, use_container_width=True)
 
-    # importância
     importancias = pd.Series(model.feature_importances_, index=features)
     importancias = importancias.sort_values(ascending=False)
 
-    st.subheader("🔥 Sensores com maior variação")
+    st.subheader("🔥 Sensores mais relevantes")
 
-    fig2, ax2 = plt.subplots(figsize=(6,3))
+    fig2, ax2 = plt.subplots(figsize=(6, 3))
     importancias.plot(kind='bar', ax=ax2)
+
     st.pyplot(fig2, use_container_width=True)
 
-    # previsão real
     df_train['RUL_previsto'] = model.predict(df_train[features])
 
     risco = df_train.groupby('unit')['RUL_previsto'].min().reset_index()
     criticos_ml = risco[risco['RUL_previsto'] < 30]
 
-    st.subheader("🚨 Motores com risco de falha (ML)")
+    st.subheader("🚨 Motores com risco (ML)")
     st.dataframe(criticos_ml)
